@@ -586,6 +586,98 @@
             await renderHistoryFromQuery(q, document.getElementById('history-results'), dateInput);
         }
 
+        // NEW: Function to toggle sections in history card
+        window.toggleSection = (id) => {
+            document.getElementById(id).classList.toggle('hidden');
+        };
+
+        // NEW: Function to Edit Record
+        window.editRecord = async (docId) => {
+            if (!userId) return;
+            toggleLoading(true);
+            try {
+                // Updated to use Public Path
+                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'daily_records', docId);
+                const docSnap = await getDoc(docRef);
+                
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    
+                    // 1. Fill Date
+                    document.getElementById('currentDate').value = data.dateStr;
+
+                    // 2. Fill Scratch Inventory Added
+                    if (data.inventoryAdded) {
+                        for (const [denom, val] of Object.entries(data.inventoryAdded)) {
+                            const input = document.querySelector(`.scratch-added[data-price="${denom}"]`);
+                            if(input) input.value = val;
+                        }
+                    }
+
+                    // 3. Fill Scratch Inventory End (Current)
+                    if (data.inventoryEnd) {
+                        for (const [denom, val] of Object.entries(data.inventoryEnd)) {
+                            const input = document.querySelector(`.scratch-current[data-price="${denom}"]`);
+                            if(input) input.value = val;
+                        }
+                    }
+
+                    // 4. Fill Lotto
+                    if (data.lotto) {
+                        document.getElementById('lotto-sales').value = data.lotto.sales;
+                        document.getElementById('lotto-redeem-computer').value = data.lotto.redeemComp;
+                        document.getElementById('lotto-redeem-instant').value = data.lotto.redeemInst;
+                    }
+
+                    // 5. Fill Expense
+                    if (data.expenses) {
+                        document.getElementById('daily-expense').value = data.expenses.general;
+                        
+                        // Clear existing dynamic inputs
+                        document.getElementById('large-prizes-container').innerHTML = '';
+                        
+                        // Add Large Prizes
+                        if (data.expenses.largePrizes && Array.isArray(data.expenses.largePrizes)) {
+                            data.expenses.largePrizes.forEach(prize => {
+                                // Create input element first
+                                addLargePrizeInput(); 
+                                // Set value of the LAST added input
+                                const inputs = document.querySelectorAll('.large-prize-input');
+                                inputs[inputs.length - 1].value = prize.amount;
+                            });
+                        }
+                    }
+
+                    // 6. Fill Drawer Cash
+                    if (data.drawerCash !== undefined) {
+                        document.getElementById('drawer-cash').value = data.drawerCash;
+                    }
+
+                    // 7. Delete the record from history
+                    await deleteDoc(docRef);
+                    
+                    // FIX: Reload previous inventory so calculations are based on the record BEFORE the one we just deleted
+                    await loadPreviousData();
+
+                    // 8. Refresh UI
+                    calculateAll();
+                    loadRecentHistory();
+                    
+                    // 9. Switch Tab
+                    switchTab('daily');
+                    
+                    alert('已載入資料並移除原紀錄，請修改後重新儲存');
+                } else {
+                    alert('找不到該筆紀錄');
+                }
+            } catch (e) {
+                alert('載入失敗: ' + e.message);
+                console.error(e);
+            } finally {
+                toggleLoading(false);
+            }
+        };
+
         // NEW: Function to load Monthly Summary
         async function loadMonthlySummary() {
             if (!userId) return;
@@ -745,258 +837,6 @@
                 container.innerHTML = '<div class="text-center text-red-400 py-4 text-xl">讀取失敗 (可能需要建立索引)</div>';
             }
         }
-
-        // NEW: Function to Render Monthly Card (Mimics renderHistoryFromQuery structure)
-        function renderMonthlyCard(data, container, monthStr) {
-            
-            const totalExpense = data.expenses.general + data.expenses.largePrizesTotal + data.lotto.redeemComp + data.lotto.redeemInst;
-
-            // Generate Scratch Details HTML
-            let scratchDetailsHTML = '';
-            Object.entries(data.salesCounts).forEach(([denom, count]) => {
-                 if(count > 0) scratchDetailsHTML += `<div class="flex justify-between mb-1"><span>${denom}元</span><span>${count} 張</span></div>`;
-            });
-            if (scratchDetailsHTML === '') scratchDetailsHTML = '<div class="text-gray-400">無銷售</div>';
-
-            const card = document.createElement('div');
-            card.className = "bg-white rounded-xl shadow-md border-l-4 border-luxury-gold mb-4 overflow-hidden";
-            
-            // Unique ID based on month string to avoid collision
-            const uniqueId = "month-summary-" + monthStr; 
-
-            card.innerHTML = `
-                <!-- Header -->
-                <div class="p-4 border-b bg-gray-50">
-                     <div class="font-bold text-gray-700 text-xl">${monthStr} 月總結</div>
-                </div>
-
-                <!-- Summary (Always Visible) -->
-                <div class="p-4 grid grid-cols-2 gap-4 text-xl border-b border-gray-100">
-                    <div class="text-gray-500">刮刮樂銷售</div>
-                    <div class="text-right font-bold ${data.totals.scratchSales < 0 ? 'text-luxury-red' : ''}">${formatNumber(data.totals.scratchSales)}</div>
-                    
-                    <div class="text-gray-500">台彩銷售</div>
-                    <div class="text-right font-bold text-blue-600">${formatNumber(data.lotto.sales)}</div>
-                    
-                    <div class="text-gray-500">總支出&兌獎</div>
-                    <div class="text-right font-bold text-luxury-red">-${formatNumber(totalExpense)}</div>
-                    
-                    <div class="text-gray-500 font-bold pt-2 border-t">應收</div>
-                    <div class="text-right font-bold pt-2 border-t text-gray-800">${formatNumber(data.totals.netReceivable)}</div>
-                    
-                    <div class="text-gray-500 font-bold">實收</div>
-                    <div class="text-right font-bold text-gray-800">${formatNumber(data.drawerCash)}</div>
-
-                    <div class="text-gray-500 font-bold">總結</div>
-                    <div class="text-right font-black ${data.totals.finalBalance < 0 ? 'text-luxury-red' : 'text-luxury-blue'}">
-                        ${formatNumber(data.totals.finalBalance)}
-                    </div>
-                </div>
-
-                <!-- Single Toggle Dropdown -->
-                <div class="bg-gray-50 p-3 text-center cursor-pointer hover:bg-gray-100 transition-colors" onclick="toggleSection('details-${uniqueId}')">
-                    <span class="text-gray-600 text-lg font-bold"><i class="fa-solid fa-chevron-down mr-2"></i>查看完整明細</span>
-                </div>
-
-                <!-- Hidden Details Section -->
-                <div id="details-${uniqueId}" class="hidden bg-white p-4 border-t border-gray-100 text-lg">
-                    
-                    <!-- Scratch Details -->
-                    <div class="mb-4">
-                        <h4 class="font-bold text-gray-500 border-b mb-2 pb-1">刮刮樂銷售明細</h4>
-                        ${scratchDetailsHTML}
-                    </div>
-
-                    <!-- Lotto Details -->
-                    <div class="mb-4">
-                        <h4 class="font-bold text-gray-500 border-b mb-2 pb-1">台彩銷售明細</h4>
-                        <div class="flex justify-between mb-1"><span>銷售</span><span>${formatNumber(data.lotto.sales)}</span></div>
-                        <div class="flex justify-between mb-1"><span>電腦兌獎</span><span class="text-red-500">-${formatNumber(data.lotto.redeemComp)}</span></div>
-                        <div class="flex justify-between mb-1"><span>立即兌獎</span><span class="text-red-500">-${formatNumber(data.lotto.redeemInst)}</span></div>
-                    </div>
-
-                    <!-- Expense Details -->
-                    <div class="mb-4">
-                        <h4 class="font-bold text-gray-500 border-b mb-2 pb-1">支出明細</h4>
-                        <div class="flex justify-between mb-1"><span>一般支出</span><span class="text-red-500">-${formatNumber(data.expenses.general)}</span></div>
-                        <div class="flex justify-between mb-1"><span>大額兌獎合計</span><span class="text-red-500">-${formatNumber(data.expenses.largePrizesTotal)}</span></div>
-                    </div>
-                </div>
-            `;
-            container.appendChild(card);
-        }
-
-        // NEW: Function to Render Yearly Card
-        function renderYearlyCard(data, container, yearStr) {
-            
-            const totalExpense = data.expenses.general + data.expenses.largePrizesTotal + data.lotto.redeemComp + data.lotto.redeemInst;
-
-            // Generate Scratch Details HTML
-            let scratchDetailsHTML = '';
-            Object.entries(data.salesCounts).forEach(([denom, count]) => {
-                 if(count > 0) scratchDetailsHTML += `<div class="flex justify-between mb-1"><span>${denom}元</span><span>${count} 張</span></div>`;
-            });
-            if (scratchDetailsHTML === '') scratchDetailsHTML = '<div class="text-gray-400">無銷售</div>';
-
-            const card = document.createElement('div');
-            card.className = "bg-white rounded-xl shadow-md border-l-4 border-luxury-gold mb-4 overflow-hidden";
-            
-            // Unique ID based on year string
-            const uniqueId = "year-summary-" + yearStr;
-
-            card.innerHTML = `
-                <!-- Header -->
-                <div class="p-4 border-b bg-gray-50">
-                     <div class="font-bold text-gray-700 text-xl">${yearStr} 年總結</div>
-                </div>
-
-                <!-- Summary (Always Visible) -->
-                <div class="p-4 grid grid-cols-2 gap-4 text-xl border-b border-gray-100">
-                    <div class="text-gray-500">刮刮樂銷售</div>
-                    <div class="text-right font-bold ${data.totals.scratchSales < 0 ? 'text-luxury-red' : ''}">${formatNumber(data.totals.scratchSales)}</div>
-                    
-                    <div class="text-gray-500">台彩銷售</div>
-                    <div class="text-right font-bold text-blue-600">${formatNumber(data.lotto.sales)}</div>
-                    
-                    <div class="text-gray-500">總支出&兌獎</div>
-                    <div class="text-right font-bold text-luxury-red">-${formatNumber(totalExpense)}</div>
-                    
-                    <div class="text-gray-500 font-bold pt-2 border-t">應收</div>
-                    <div class="text-right font-bold pt-2 border-t text-gray-800">${formatNumber(data.totals.netReceivable)}</div>
-                    
-                    <div class="text-gray-500 font-bold">實收</div>
-                    <div class="text-right font-bold text-gray-800">${formatNumber(data.drawerCash)}</div>
-
-                    <div class="text-gray-500 font-bold">總結</div>
-                    <div class="text-right font-black ${data.totals.finalBalance < 0 ? 'text-luxury-red' : 'text-luxury-blue'}">
-                        ${formatNumber(data.totals.finalBalance)}
-                    </div>
-                </div>
-
-                <!-- Single Toggle Dropdown -->
-                <div class="bg-gray-50 p-3 text-center cursor-pointer hover:bg-gray-100 transition-colors" onclick="toggleSection('details-${uniqueId}')">
-                    <span class="text-gray-600 text-lg font-bold"><i class="fa-solid fa-chevron-down mr-2"></i>查看完整明細</span>
-                </div>
-
-                <!-- Hidden Details Section -->
-                <div id="details-${uniqueId}" class="hidden bg-white p-4 border-t border-gray-100 text-lg">
-                    
-                    <!-- Scratch Details -->
-                    <div class="mb-4">
-                        <h4 class="font-bold text-gray-500 border-b mb-2 pb-1">刮刮樂銷售明細</h4>
-                        ${scratchDetailsHTML}
-                    </div>
-
-                    <!-- Lotto Details -->
-                    <div class="mb-4">
-                        <h4 class="font-bold text-gray-500 border-b mb-2 pb-1">台彩銷售明細</h4>
-                        <div class="flex justify-between mb-1"><span>銷售</span><span>${formatNumber(data.lotto.sales)}</span></div>
-                        <div class="flex justify-between mb-1"><span>電腦兌獎</span><span class="text-red-500">-${formatNumber(data.lotto.redeemComp)}</span></div>
-                        <div class="flex justify-between mb-1"><span>立即兌獎</span><span class="text-red-500">-${formatNumber(data.lotto.redeemInst)}</span></div>
-                    </div>
-
-                    <!-- Expense Details -->
-                    <div class="mb-4">
-                        <h4 class="font-bold text-gray-500 border-b mb-2 pb-1">支出明細</h4>
-                        <div class="flex justify-between mb-1"><span>一般支出</span><span class="text-red-500">-${formatNumber(data.expenses.general)}</span></div>
-                        <div class="flex justify-between mb-1"><span>大額兌獎合計</span><span class="text-red-500">-${formatNumber(data.expenses.largePrizesTotal)}</span></div>
-                    </div>
-                </div>
-            `;
-            container.appendChild(card);
-        }
-
-        // NEW: Function to toggle sections in history card
-        window.toggleSection = (id) => {
-            document.getElementById(id).classList.toggle('hidden');
-        };
-
-        // NEW: Function to Edit Record
-        window.editRecord = async (docId) => {
-            if (!userId) return;
-            toggleLoading(true);
-            try {
-                // Updated to use Public Path
-                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'daily_records', docId);
-                const docSnap = await getDoc(docRef);
-                
-                if (docSnap.exists()) {
-                    const data = docSnap.data();
-                    
-                    // 1. Fill Date
-                    document.getElementById('currentDate').value = data.dateStr;
-
-                    // 2. Fill Scratch Inventory Added
-                    if (data.inventoryAdded) {
-                        for (const [denom, val] of Object.entries(data.inventoryAdded)) {
-                            const input = document.querySelector(`.scratch-added[data-price="${denom}"]`);
-                            if(input) input.value = val;
-                        }
-                    }
-
-                    // 3. Fill Scratch Inventory End (Current)
-                    if (data.inventoryEnd) {
-                        for (const [denom, val] of Object.entries(data.inventoryEnd)) {
-                            const input = document.querySelector(`.scratch-current[data-price="${denom}"]`);
-                            if(input) input.value = val;
-                        }
-                    }
-
-                    // 4. Fill Lotto
-                    if (data.lotto) {
-                        document.getElementById('lotto-sales').value = data.lotto.sales;
-                        document.getElementById('lotto-redeem-computer').value = data.lotto.redeemComp;
-                        document.getElementById('lotto-redeem-instant').value = data.lotto.redeemInst;
-                    }
-
-                    // 5. Fill Expense
-                    if (data.expenses) {
-                        document.getElementById('daily-expense').value = data.expenses.general;
-                        
-                        // Clear existing dynamic inputs
-                        document.getElementById('large-prizes-container').innerHTML = '';
-                        
-                        // Add Large Prizes
-                        if (data.expenses.largePrizes && Array.isArray(data.expenses.largePrizes)) {
-                            data.expenses.largePrizes.forEach(prize => {
-                                // Create input element first
-                                addLargePrizeInput(); 
-                                // Set value of the LAST added input
-                                const inputs = document.querySelectorAll('.large-prize-input');
-                                inputs[inputs.length - 1].value = prize.amount;
-                            });
-                        }
-                    }
-
-                    // 6. Fill Drawer Cash
-                    if (data.drawerCash !== undefined) {
-                        document.getElementById('drawer-cash').value = data.drawerCash;
-                    }
-
-                    // 7. Delete the record from history
-                    await deleteDoc(docRef);
-                    
-                    // FIX: Reload previous inventory so calculations are based on the record BEFORE the one we just deleted
-                    await loadPreviousData();
-
-                    // 8. Refresh UI
-                    calculateAll();
-                    loadRecentHistory();
-                    
-                    // 9. Switch Tab
-                    switchTab('daily');
-                    
-                    alert('已載入資料並移除原紀錄，請修改後重新儲存');
-                } else {
-                    alert('找不到該筆紀錄');
-                }
-            } catch (e) {
-                alert('載入失敗: ' + e.message);
-                console.error(e);
-            } finally {
-                toggleLoading(false);
-            }
-        };
 
         async function renderHistoryFromQuery(q, container, dateFilter = null) {
             container.innerHTML = '<div class="loader mx-auto"></div>';
